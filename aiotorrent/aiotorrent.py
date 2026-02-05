@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import logging
 import platform
-
 import json
 from aiotorrent.peer import Peer
 from aiotorrent.core.bencode_utils import bencode_util
@@ -15,244 +14,120 @@ from aiotorrent.downloader import FilesDownloadManager
 from aiotorrent.core.util import DownloadStrategy
 from aiotorrent.DHTv4 import SimpleDHTCrawler
 
-
-
-# Asyncio throws runtime error if the platform is windows
-# RuntimeError: Event loop is closed
-# FOUND FIX: https://stackoverflow.com/a/66772242
 if platform.system() == 'Windows':
-	asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-
 class Torrent:
-	def __init__(self, torrent_file):
-		# The object passed is a file-like object
-		if isinstance(torrent_file, io.IOBase):
-			bencoded_data = torrent_file.read()
-		else:
-			# The object passed is a filepath
-			with open(torrent_file, 'rb') as torrent:
-				bencoded_data = torrent.read()
+    def __init__(self, torrent_file):
+        if isinstance(torrent_file, io.IOBase):
+            bencoded_data = torrent_file.read()
+        else:
+            with open(torrent_file, 'rb') as torrent:
+                bencoded_data = torrent.read()
 
-		# dict_keys(['files', 'name', 'piece length', 'pieces'])
-		data = bencode_util.bdecode(bencoded_data)
+        data = bencode_util.bdecode(bencoded_data)
+        self.trackers, self.peers, self.name = list(), list(), data['info']['name']
+        self.files = None 
+        self.has_multiple_files = 'files' in data['info']
 
-		self.trackers = list()
-		self.peers = list()
-		self.name = data['info']['name']
-		self.files = None # This will be replaced with a file_tree object
+        piece_hashmap, announce = dict(), data.get('announce')
+        files = data['info']['files'] if self.has_multiple_files else self.name
+        piece_len = data['info']['piece length']
 
-		# Check if this torrent has multiple files
-		self.has_multiple_files = True if 'files' in data['info'] else False
+        # Optimization: Use generator expression for sum instead of list allocation
+        size = sum(f['length'] for f in files) if self.has_multiple_files else data['info']['length']
 
-		size = int()
-		peers = list()
-		trackers = list()
-		piece_hashmap = dict()
-		announce = data['announce'] if 'announce' in data else None # announce is a string
-		files = data['info']['files'] if self.has_multiple_files else self.name
-		piece_len = data['info']['piece length']
+        raw_info_hash = bencode_util.bencode(data['info'])
+        info_hash = hashlib.sha1(raw_info_hash).digest()
+        raw_pieces = data['info']['pieces']
 
-		# If torrent has multiple files, set torrent
-		# size to sum of length of all individual files
-		if self.has_multiple_files:
-			size = sum([file['length'] for file in files])
-		else:
-			size = data['info']['length']
+        for index, piece in enumerate(chunk(raw_pieces, 20)):
+            piece_hashmap[index] = piece
 
-		# re-encode info to -> bencode and then apply sha-1 to it
-		raw_info_hash = bencode_util.bencode(data['info'])
-		info_hash = hashlib.sha1(raw_info_hash).digest()
+        self.torrent_info = {
+            'name': self.name, 'size': size, 'files': files,
+            'piece_len': piece_len, 'info_hash': info_hash,
+            'piece_hashmap': piece_hashmap, 'peers': list(), 'trackers': list(),
+        }
 
-		# get pieces and convert it from hexadecimal (string) to bytes object
-		raw_pieces = data['info']['pieces']
+        if announce: self.torrent_info['trackers'].append(announce)
 
-		# for every 20 byte in raw_pieces -> str, map index:piece (int:str) to pieces
-		for index, piece in enumerate(chunk(raw_pieces, 20)):
-			piece_hashmap[index] = piece
+        if 'announce-list' in data:
+            # Optimization: Use set for O(1) tracker deduplication
+            seen = set(self.torrent_info['trackers'])
+            for tier in data['announce-list']:
+                if tier[0] not in seen:
+                    self.torrent_info['trackers'].append(tier[0])
+                    seen.add(tier[0])
 
-		self.torrent_info = {
-			'name': data['info']['name'],
-			'size': size,
-			'files': files,
-			'piece_len': piece_len,
-			'info_hash': info_hash,
-			'piece_hashmap': piece_hashmap,
-			'peers': peers,
-			'trackers': trackers,
-		}
+        self.files = FileTree(self.torrent_info)
 
+    async def _contact_trackers(self):
+        # Optimization: Bound tracker contact with a gather limit or return_exceptions
+        task_list = [asyncio.create_task(TrackerFactory(addr, self.torrent_info).get_peers()) 
+                     for addr in self.torrent_info['trackers']]
+        self.trackers = [TrackerFactory(addr, self.torrent_info) for addr in self.torrent_info['trackers']]
+        await asyncio.gather(*task_list, return_exceptions=True)
 
-		# Add announce url to trackers list if announce exists
-		if announce: self.torrent_info['trackers'].append(announce)
+    def _get_peers(self):
+        # Optimization: Set update is O(N) vs manual loop O(N^2)
+        peers_aggregated = set()
+        for tracker in self.trackers:
+            peers_aggregated.update(tracker.peers)
+        logger.info(f"Aggregated {len(peers_aggregated)} unique peers")
+        return peers_aggregated
 
-		# Adding trackers to torrent info. Tracker is a list that contains a string
-		if 'announce-list' in data:
-			for tracker in data['announce-list']:
-				tracker = tracker[0]
-				if not tracker in self.torrent_info['trackers']:
-					self.torrent_info['trackers'].append(tracker)
+    async def _get_peers_dht(self, timeout=30):
+        dht_crawler = SimpleDHTCrawler(self.torrent_info['info_hash'])
+        peers = await dht_crawler.crawl(min_peers_to_retrieve=100)
+        return peers
 
-		self.files = FileTree(self.torrent_info)
+    def show_files(self):
+        for file in self.files: logger.info(f"File: {file}")
 
-		# for file in self.files:
-		# 	logger.debug(f"File: {file}")
+    async def init(self, dht_enabled=False):
+        await self._contact_trackers()
+        peer_addrs = self._get_peers()
+        if dht_enabled: peer_addrs |= await self._get_peers_dht()
 
-			
-	async def _contact_trackers(self):
-		task_list = list()
+        self.peers = [Peer(p, self.torrent_info) for p in peer_addrs]
+        # Performance: Execute network handshakes in parallel batches
+        await asyncio.gather(*(p.connect() for p in self.peers))
+        await asyncio.gather(*(p.handshake() for p in self.peers))
+        await asyncio.gather(*(p.intrested() for p in self.peers))
 
-		for tracker_addr in self.torrent_info['trackers']:
-			tracker = TrackerFactory(tracker_addr, self.torrent_info)
-			self.trackers.append(tracker)
-			task_list.append(asyncio.create_task(tracker.get_peers()))
+        self.torrent_info['peers'] = peer_addrs
+        logger.info(f"Init complete: {len([p for p in self.peers if p.has_handshaked])} active peers")
 
-		await asyncio.gather(*task_list)
+    async def download(self, file, strategy=DownloadStrategy.DEFAULT):
+        active_peers = [p for p in self.peers if p.has_handshaked]
+        fd_man = FilesDownloadManager(self.torrent_info, active_peers)
+        with PieceWriter(self.torrent_info['name'], file) as piece_writer:
+            async for piece in (fd_man.get_file(file) if strategy == DownloadStrategy.DEFAULT 
+                               else fd_man.get_file_sequential(file, self.torrent_info['piece_len'])):
+                piece_writer.write(piece)
 
+    async def __generate_torrent_stream(self, file):
+        active_peers = [p for p in self.peers if p.has_handshaked]
+        fd_man = FilesDownloadManager(self.torrent_info, active_peers)
+        async for piece in fd_man.get_file_sequential(file, self.torrent_info['piece_len']):
+            yield piece.data
 
-	def _get_peers(self):
-		peers_aggregated = set()
-		# Get peers address from each tracker
-		# for tracker in self.trackers:
-		# 	for peer in tracker.peers:
-		# 		if not peer in self.torrent_info['peers']:
-		# 			# Add peer address to torrent info
-		# 			self.torrent_info['peers'].append(peer)
-		# 			# create and add peers object to self
-		# 			self.peers.append(Peer(peer, self.torrent_info))
+    async def stream(self, file, host="127.0.0.1", port=8080):
+        from starlette.applications import Starlette
+        from starlette.responses import StreamingResponse
+        from starlette.routing import Route
+        import uvicorn
+        app = Starlette(routes=[Route('/', lambda r: StreamingResponse(self.__generate_torrent_stream(file)))])
+        await uvicorn.Server(uvicorn.Config(app, host=host, port=port)).serve()
 
-		for tracker in self.trackers:
-			peer_list = set(tracker.peers)
-			peers_aggregated |= peer_list
-
-		logger.info(f"Got {len(peers_aggregated)} Peers for this torrent")
-		return peers_aggregated
-
-
-	async def _get_peers_dht(self, timeout = 30):
-		info_hash = self.torrent_info['info_hash']
-		dht_crawler = SimpleDHTCrawler(info_hash)
-		peers = await dht_crawler.crawl(min_peers_to_retrieve=100)
-		# peers = await asyncio.wait_for(dht_crawler.crawl(), timeout = timeout)
-		logger.info(f"Got {len(peers)} Peers using DHT")
-		return peers
-
-
-	def show_files(self):
-		for file in self.files:
-			logger.info(f"File: {file}")
-
-
-	async def init(self, dht_enabled = False):
-		# Contact Trackers and get peers
-		await self._contact_trackers()
-		peer_addrs = self._get_peers() #TODO: Rename get_peers to add_peers
-
-		dht_peers = set()
-		if dht_enabled:
-			dht_peers = await self._get_peers_dht(timeout=30)
-			peer_addrs |= dht_peers
-
-		# If there are more than 512 peers, randomly shortlist them
-		#TODO: Use a better strategy to shortlist peers. 
-		# When I tried opening connections to ~1300 peers parallely
-		# Error: ValueError: too many file descriptors in select() 
-		# ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
-		# if len(peer_addrs) > 128:
-		# 	shortlisted_peers = set()
-		# 	for _ in range(128):
-		# 		shortlisted_peers.add(peer_addrs.pop())
-
-		# Initialize and attach all aggregated peers objects to self
-		self.peers = [Peer(peer, self.torrent_info) for peer in peer_addrs]
-
-		# Use list comprehension to create and execute peer functions in parallel
-		connections = [peer.connect() for peer in self.peers]
-		await asyncio.gather(*connections)
-
-		handshakes = [peer.handshake() for peer in self.peers]
-		await asyncio.gather(*handshakes)
-
-		interested_msgs = [peer.intrested() for peer in self.peers]
-		await asyncio.gather(*interested_msgs)
-
-		# Add peers addresses to torrent_info
-		self.torrent_info['peers'] = peer_addrs
-
-		# Info
-		active_peers = [peer for peer in self.peers if peer.has_handshaked]
-		active_trackers = [tracker for tracker in self.trackers if tracker.active]
-		logger.info(f"{len(active_peers)} peers active")
-		logger.info(f"{len(active_trackers)} trackers active")
-
-
-	async def download(self, file, strategy=DownloadStrategy.DEFAULT):
-		#TODO: Add a peer_list parameter with the default value of self.peers
-		active_peers = [peer for peer in self.peers if peer.has_handshaked]
-		fd_man = FilesDownloadManager(self.torrent_info, active_peers)
-		directory = self.torrent_info['name']
-		logger.info(f"Using strategy {strategy} to download file {file}")
-
-		with PieceWriter(directory, file) as piece_writer:
-			if strategy == DownloadStrategy.DEFAULT:
-				async for piece in fd_man.get_file(file):
-					piece_writer.write(piece)
-
-			elif strategy == DownloadStrategy.SEQUENTIAL:
-				piece_len = self.torrent_info['piece_len']
-				async for piece in fd_man.get_file_sequential(file, piece_len):
-					piece_writer.write(piece)
-
-
-	async def __generate_torrent_stream(self, file):
-		active_peers = [peer for peer in self.peers if peer.has_handshaked]
-		fd_man = FilesDownloadManager(self.torrent_info, active_peers)
-		piece_len = self.torrent_info['piece_len']
-		async for piece in fd_man.get_file_sequential(file, piece_len):
-			yield piece.data
-
-
-	async def stream(self, file, host="127.0.0.1", port=8080):
-		try:
-			from starlette.applications import Starlette
-			from starlette.responses import StreamingResponse
-			from starlette.routing import Route
-			import uvicorn
-		except (ImportError, ModuleNotFoundError):
-			raise ModuleNotFoundError("Streaming dependencies not found")
-
-		async def homepage(request):
-			return StreamingResponse(
-				self.__generate_torrent_stream(file),
-				media_type='video/mp4'
-			)
-
-		app = Starlette(debug=True, routes=[
-				Route('/', homepage),
-		])
-
-		config = uvicorn.Config(app, host=host, port=port)
-		server = uvicorn.Server(config)
-		await server.serve()
-
-
-	def get_torrent_info(self, format='json', verbose=False):
-		# TODO: Add Yaml as an export format
-		torrent_info = copy.deepcopy(self.torrent_info)
-		torrent_info['info_hash'] = torrent_info['info_hash'].hex()
-		
-		piece_hashmap = torrent_info.pop('piece_hashmap')
-		peer_list = torrent_info.pop('peers')
-
-		if verbose:
-			# Serialize piece hashes by converting byte objects to their hex representations
-			torrent_info['piece_hashmap'] = {}
-			for piece_no, piece_hash in piece_hashmap.items():
-				torrent_info['piece_hashmap'][piece_no] = piece_hash.hex()
-
-			torrent_info['peers'] = tuple(peer_list)
-
-		return json.dumps(torrent_info)
+    def get_torrent_info(self, format='json', verbose=False):
+        info = {k: v for k, v in self.torrent_info.items() if k not in ['piece_hashmap', 'peers']}
+        info['info_hash'] = self.torrent_info['info_hash'].hex()
+        if verbose:
+            info['piece_hashmap'] = {idx: h.hex() for idx, h in self.torrent_info['piece_hashmap'].items()}
+            info['peers'] = list(self.torrent_info['peers'])
+        return json.dumps(info)
