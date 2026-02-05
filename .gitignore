@@ -136,3 +136,4 @@ myvenv
 *.jpg
 *.srt
 poetry.lock
+.appmodconfig
