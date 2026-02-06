@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import hashlib
 from struct import unpack
 from ipaddress import IPv4Address
 from aiotorrent.core.bencode_utils import bencode_util
@@ -55,7 +56,7 @@ class SimpleDHTCrawler:
 
     def _bytes_to_addr(self, blob):
         try:
-            # FIX: Surgical unpacking with validation
+            # Surgical unpacking with validation
             ip_raw, port = unpack('>IH', blob)
             return str(IPv4Address(ip_raw)), port
         except (ValueError, TypeError) as e:
@@ -110,7 +111,7 @@ class SimpleDHTCrawler:
             target_addr = await self.nodes_to_crawl.get()
             asyncio.create_task(self.send_req(target_addr, sem, loop))
             
-            # FIX: Adaptive throttle to prevent flooding local network
+            # Adaptive throttle to prevent flooding local network
             if self.nodes_to_crawl.qsize() > 50:
                 await asyncio.sleep(0.05)
             

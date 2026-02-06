@@ -1,9 +1,7 @@
 import asyncio
 import logging
 from bitstring import BitArray
-from typing import Tuple, Dict, Any, Optional
-
-# FIX: Explicit imports for better traceability and reduced GC overhead
+from typing import Tuple, Dict, Any
 from aiotorrent.core.response_handler import PeerResponseHandler
 from aiotorrent.core.response_parser import PeerResponseParser
 from aiotorrent.core.message_generator import MessageGenerator
@@ -25,7 +23,7 @@ class Peer:
         self.has_handshaked = False
         self.disconnect_count = 0
         
-        # FIX: Lazy initialization of BitArray to save memory on large swarms
+        # Lazy initialization of BitArray to save memory on large swarms
         self._num_pieces = len(torrent_info['piece_hashmap'])
         self.pieces = BitArray(self._num_pieces)
         
@@ -39,10 +37,10 @@ class Peer:
         return self.priority < other.priority
 
     async def connect(self, timeout: int = 10):
-        """MNC-standard connection with specific error propagation."""
+        """Standard connection with specific error propagation."""
         ip, port = self.address
         try:
-            # FIX: Increased timeout for global swarm compatibility
+            # Increased timeout for global swarm compatibility
             conn_task = asyncio.open_connection(ip, port)
             self.reader, self.writer = await asyncio.wait_for(conn_task, timeout=timeout)
             self.active = True
@@ -56,7 +54,7 @@ class Peer:
         self.disconnect_count += 1
         if hasattr(self, 'writer'):
             try:
-                # FIX: Proper drain and wait_closed sequence
+                # Proper drain and wait_closed sequence
                 self.writer.close()
                 await self.writer.wait_closed()
             except Exception:
@@ -71,13 +69,13 @@ class Peer:
         response = await self.send_message(msg)
         
         if response:
-            # FIX: Reusing parser instance to reduce memory pressure
+            # Reusing parser instance to reduce memory pressure
             parsed_data = self._parser.parse(response)
             await self._handler.handle(parsed_data)
             self.has_handshaked = True
 
     async def set_interested(self):
-        """Fixed spelling: Formerly 'intrested'. Declares interest to the peer."""
+        """Declares interest to the peer."""
         if self.active and self.has_handshaked:
             msg = MessageGenerator.gen_interested()
             response = await self.send_message(msg)
@@ -87,7 +85,7 @@ class Peer:
 
     async def send_message(self, message: bytes, timeout: int = 5) -> bytes:
         """Sends data and reads response with recursion gating and buffer limits."""
-        # FIX: Recursion Guard
+        # Recursion Guard
         if not self.active:
             if self.disconnect_count > 5:
                 return b""
@@ -98,8 +96,7 @@ class Peer:
             self.writer.write(message)
             await self.writer.drain()
             
-            # FIX: Non-blocking fixed-size read instead of infinite buffer accumulation
-            # For BitTorrent, we usually expect a 4-byte length prefix first
+            # Non-blocking fixed-size read
             response = await asyncio.wait_for(self.reader.read(4096), timeout=timeout)
             return response
         except Exception as e:

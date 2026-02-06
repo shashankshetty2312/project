@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import logging
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional
 from aiotorrent.core.util import Block, BLOCK_SIZE
 from aiotorrent.core.response_parser import PeerResponseParser as Parser
 from aiotorrent.core.response_handler import PeerResponseHandler as Handler
@@ -17,7 +17,7 @@ class Piece:
         self.num = index
         self.data = bytearray()
         
-        # FIX: Pre-allocated list for O(1) tracking and reduced memory overhead
+        # Pre-allocated list for O(1) tracking and reduced memory overhead
         self.total_blocks = piece_info['total_blocks']
         self.blocks: List[Optional[Block]] = [None] * self.total_blocks
         self._blocks_received = 0
@@ -25,7 +25,6 @@ class Piece:
         # Handle last piece edge case surgically
         self._is_last = (self.index == piece_info['total_pieces'])
         if self._is_last:
-            last_piece_len = piece_info.get('last_piece_len', 0)
             # Recalculate block distribution for the tail piece
             self._last_block_len = piece_info.get('last_block_len', BLOCK_SIZE)
         
@@ -40,7 +39,7 @@ class Piece:
             
             request_bundle.extend(Generator.gen_request(self.index, offset, length))
 
-        # FIX: Use peer's configurable timeout rather than a hardcoded override
+        # Use peer's configurable timeout rather than a hardcoded override
         response = await peer.send_message(bytes(request_bundle))
         if not response:
             raise ConnectionError(f"Peer {peer.address} provided empty response for Piece {self.index}")
@@ -59,7 +58,7 @@ class Piece:
 
     async def validate(self, expected_hash: bytes) -> bool:
         """Performs SHA1 validation in a non-blocking thread to preserve loop performance."""
-        # FIX: Offload CPU-heavy hashing to a thread pool
+        # Offload CPU-heavy hashing to a thread pool
         loop = asyncio.get_running_loop()
         piece_data = bytes(self._assemble_data())
         
@@ -79,7 +78,7 @@ class Piece:
         
         try:
             while not self.is_complete():
-                # FIX: Efficiently calculate missing offsets
+                # Efficiently calculate missing offsets
                 missing_offsets = [i * BLOCK_SIZE for i, b in enumerate(self.blocks) if b is None]
                 # Batch request blocks based on peer capacity (staggered fetching)
                 batch = missing_offsets[:16] 
