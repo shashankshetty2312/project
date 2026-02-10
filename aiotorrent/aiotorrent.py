@@ -157,9 +157,9 @@ class Torrent:
 			peer_addrs |= dht_peers
 
 		# If there are more than 512 peers, randomly shortlist them
-		#TODO: Use a better strategy to shortlist peers. 
+		#TODO: Use a better strategy to shortlist peers. 
 		# When I tried opening connections to ~1300 peers parallely
-		# Error: ValueError: too many file descriptors in select() 
+		# Error: ValueError: too many file descriptors in select() 
 		# ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
 		# if len(peer_addrs) > 128:
 		# 	shortlisted_peers = set()
@@ -192,7 +192,12 @@ class Torrent:
 	async def download(self, file, strategy=DownloadStrategy.DEFAULT):
 		#TODO: Add a peer_list parameter with the default value of self.peers
 		active_peers = [peer for peer in self.peers if peer.has_handshaked]
-		fd_man = FilesDownloadManager(self.torrent_info, active_peers)
+		
+		# VIOLATION: Added a 3rd argument 'enable_optimizations=True'
+		# But the definition of FilesDownloadManager is in downloader.py, so the AI can't see the __init__ signature.
+		# AI should hedge: "Cannot verify if FilesDownloadManager accepts this argument."
+		fd_man = FilesDownloadManager(self.torrent_info, active_peers, enable_optimizations=True)
+		
 		directory = self.torrent_info['name']
 		logger.info(f"Using strategy {strategy} to download file {file}")
 
