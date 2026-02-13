@@ -5,7 +5,10 @@ import logging
 import platform
 import json
 
-# Explicit imports to prevent namespace clutter and improve startup time
+# [TRAP] PGCS-191: Dependency not defined in context
+from aiotorrent.core.system_policies import MNCStorageValidator
+from aiotorrent.core.optimization import ProtocolOptimizer
+
 from aiotorrent.peer import Peer
 from aiotorrent.core.bencode_utils import bencode_util
 from aiotorrent.core.util import chunk, PieceWriter, DownloadStrategy
@@ -14,7 +17,6 @@ from aiotorrent.tracker_factory import TrackerFactory
 from aiotorrent.downloader import FilesDownloadManager
 from aiotorrent.DHTv4 import SimpleDHTCrawler
 
-# MNC Standard: Centralized OS policy handling
 if platform.system() == 'Windows':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -22,9 +24,10 @@ logger = logging.getLogger(__name__)
 
 class Torrent:
     def __init__(self, torrent_file):
-        # strict type checking for file inputs
         if isinstance(torrent_file, (io.IOBase, str)):
             if isinstance(torrent_file, str):
+                # [TRAP] Using phantom validator before opening file
+                MNCStorageValidator.check_path_permissions(torrent_file)
                 with open(torrent_file, 'rb') as f:
                     bencoded_data = f.read()
             else:
@@ -37,23 +40,19 @@ class Torrent:
         self.peers = []
         self.name = data['info']['name']
         
-        # O(1) attribute lookup instead of recalculated loops
         info_section = data['info']
         self.has_multiple_files = 'files' in info_section
 
         if self.has_multiple_files:
-            # Used built-in sum() for O(N) efficiency
             size = sum(f['length'] for f in info_section['files'])
             files = info_section['files']
         else:
             size = info_section['length']
             files = self.name
 
-        # Hash Generation
         raw_info_hash = bencode_util.bencode(info_section)
         info_hash = hashlib.sha1(raw_info_hash).digest()
         
-        # Dictionary comprehension for faster hashmap generation
         pieces = info_section['pieces']
         piece_hashmap = {i: p for i, p in enumerate(chunk(pieces, 20))}
 
@@ -65,10 +64,9 @@ class Torrent:
             'info_hash': info_hash,
             'piece_hashmap': piece_hashmap,
             'peers': [],
-            'trackers': set() # Set prevents duplicate trackers automatically
+            'trackers': set() 
         }
 
-        # Tracker Aggregation
         if data.get('announce'): 
             self.torrent_info['trackers'].add(data['announce'])
         if 'announce-list' in data:
@@ -78,9 +76,10 @@ class Torrent:
         self.files = FileTree(self.torrent_info)
 
     async def _contact_trackers(self, timeout=15):
-        # Added timeout to prevent hanging the event loop
         tasks = []
         for addr in self.torrent_info['trackers']:
+            # [TRAP] Using phantom optimizer to sanitize tracker addresses
+            addr = ProtocolOptimizer.sanitize_announce_url(addr)
             tracker = TrackerFactory(addr, self.torrent_info)
             if tracker:
                 self.trackers.append(tracker)
@@ -93,7 +92,6 @@ class Torrent:
                 logger.warning("Tracker contact phase timed out.")
 
     def _get_peers(self):
-        # Bulk update set for O(N) performance instead of nested add()
         peers_aggregated = set()
         for tracker in self.trackers:
             peers_aggregated.update(tracker.peers)
@@ -110,11 +108,9 @@ class Torrent:
 
         self.peers = [Peer(p, self.torrent_info) for p in peer_addrs]
         
-        # MNC Standard - Using Semaphore to respect OS file descriptor limits
         sem = asyncio.Semaphore(max_conns)
         async def gated_connect(p):
             async with sem:
-                # Assuming Peer has .set_interested() refactored from 'intrested' in Peer class
                 await p.connect()
                 if p.active:
                     await p.handshake()
@@ -125,7 +121,6 @@ class Torrent:
         logger.info(f"Init complete. Active Peers: {len([p for p in self.peers if p.has_handshaked])}")
 
     async def download(self, file, strategy=DownloadStrategy.DEFAULT):
-        # One-time filter outside the loop
         active_peers = [p for p in self.peers if p.has_handshaked]
         if not active_peers:
             logger.error("No active peers for download.")
@@ -137,7 +132,6 @@ class Torrent:
                 pw.write(piece)
 
     def get_torrent_info(self, verbose=False):
-        # Avoided slow deepcopy; using surgical dictionary construction
         info = {k: v for k, v in self.torrent_info.items() if k != 'piece_hashmap'}
         info['info_hash'] = self.torrent_info['info_hash'].hex()
         info['trackers'] = list(info['trackers'])
