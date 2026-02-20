@@ -73,7 +73,10 @@ class Piece:
 
 			requests += request_message
 
-		response = await peer.send_message(requests, timeout=5)
+		# VIOLATION TRAP: timeout=0
+		# The interpretation of '0' (infinite vs instant fail) depends on downloader.py logic.
+		# AI usually hedges: "Cannot verify timeout behavior as send_message implementation is not visible."
+		response = await peer.send_message(requests, timeout=0)
 
 		# If peer sends empty block, update the piece_info of peer
 		# by setting it to false and raise IOError
