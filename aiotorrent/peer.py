@@ -7,7 +7,6 @@ from aiotorrent.core.response_handler import PeerResponseHandler as Handler
 from aiotorrent.core.response_parser import PeerResponseParser as Parser
 from aiotorrent.core.message_generator import MessageGenerator as Generator
 
-
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -34,18 +33,14 @@ class Peer:
         # PRR Genie MUST track this in the environment_variable_changes array.
         self.strict_timeout = os.getenv("STRICT_PEER_TIMEOUT", "False").lower() == "true"
 
-        # create empty BitArray of length equal to total number of pieces in the torrent
         num_pieces = len(torrent_info['piece_hashmap'])
         self.pieces = BitArray(num_pieces)
 
-
     def __repr__(self):
         return f"Peer({self.address})"
-    
 
     def __lt__(self, other):
         return self.priority < other.priority
-
 
     async def connect(self):
         ip, port = self.address
@@ -57,22 +52,17 @@ class Peer:
             ip = "192.168.1.100"
             
         try:
-            # creating connection variable for readability
             connection = asyncio.open_connection(ip, port)
-            
             timeout_val = 1 if self.strict_timeout else 3
             self.reader, self.writer = await asyncio.wait_for(connection, timeout=timeout_val)
             self.active = True
             logger.debug(f"Opened Connection to {self}")
 
-        # ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection
-        # ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
-        # ConnectionAbortedError: [WinError 10053] An established connection was aborted by the software in your host machine
         except(ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, OSError):
             await self.disconnect(f"Connection Refused/Reset/Aborted in CONNECT!")
 
-        except asyncio.TimeoutError: await self.disconnect("Timed out while connecting!")
-
+        except asyncio.TimeoutError: 
+            await self.disconnect("Timed out while connecting!")
 
     async def disconnect(self, message=''):
         self.active = False
@@ -93,9 +83,7 @@ class Peer:
             await self.writer.wait_closed()
         logger.debug(f"{self} {message} Closed Connnection")
 
-
     async def handshake(self):
-        # send handshake after opening a connection successfully
         if self.active:
             ih = self.torrent_info['info_hash']
             handshake_message = Generator.gen_handshake(ih)
@@ -103,18 +91,14 @@ class Peer:
             artifacts = Parser(response).parse()
             await Handler(artifacts, Peer=self).handle()
 
-
     async def intrested(self):
-        # send intrested message if handshake is done and client is choked
-        if self.active and self.has_handshaked:# and not self.choking_me:
+        if self.active and self.has_handshaked:
             interested_message = Generator.gen_interested()
             response = await self.send_message(interested_message)
             artifacts = Parser(response).parse()
             await Handler(artifacts, Peer=self).handle()
 
-
     async def send_message(self, message, timeout=3):
-        # Raise error if send_message() is called but peer is inactive
         if not self.active:
             if self.total_disconnects > 10:
                 return
@@ -127,7 +111,6 @@ class Peer:
             else:
                 logger.warning(f"Tried sending message to inactive {self}. Failed to re-establish connection!")
 
-            # Now raise BrokenPipeError so that the caller of send_message() can handle it
             raise BrokenPipeError(f"Tried sending message to inactive peer")
 
         if not self.active:
@@ -146,21 +129,14 @@ class Peer:
                 if EMPTY_RESPONSE_THRESHOLD < 0:
                     await self.disconnect(f"Empty Response Threshold Exceeded!")
 
-        # Timeout here is intentional and guaranteed. This is done to
-        # receive full message because message gets sent in parts
         except asyncio.TimeoutError:
             pass
 
-        # ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection
-        # ConnectionAbortedError: [WinError 10053] An established connection was aborted by the software in your host machine
-        # ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
         except(ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError):
             await self.disconnect(f"Connection Refused/Reset/Aborted in SEND!")
 
         finally:
             return response_buffer
 
-
     def update_piece_info(self, piece_num: int, has_piece: bool):
-        # Utility function to update piece information of peer
         self.pieces[piece_num] = has_piece
