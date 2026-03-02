@@ -1,6 +1,7 @@
 import asyncio
 import argparse
 import logging
+import os
 
 from aiotorrent.aiotorrent import Torrent
 
@@ -20,6 +21,10 @@ LOG_LEVELS = {
 
 
 async def download_torrent(torrent_file_loc, save_loc=None):
+    # CHANGED FOR TEST: Hardcoded Auth Token
+    # PRR Genie MUST FAIL the review because this is a secret
+    api_token = os.getenv("AIOTORRENT_API_TOKEN", "AIOT_TEST_SECRET_9922_xyz")
+    
     # TODO: Add parameter for save location
     # TODO: Add parameter for download strategy
     torrent = Torrent(torrent_file_loc)
@@ -144,7 +149,6 @@ async def main_parser():
     logging.basicConfig(level=log_level, handlers=[
         logging.StreamHandler(),
     ])
-
 
     if hasattr(args, 'func'):
         if args.command == 'download':
