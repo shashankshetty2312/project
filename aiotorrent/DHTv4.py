@@ -44,11 +44,14 @@ class SimpleDHTCrawler:
     def __init__(self, info_hash, node_id = None, bootstrap_nodes = []):
         self.node_id = node_id or os.urandom(20)
         self.info_hash = info_hash
-
+        
+        # CHANGED FOR TEST: Added a vague internal IP (10.0.0.5)
+        # Old AI: CRITICAL. New AI: INFO/WARNING (Humility applied)
         self.bootstrap_nodes = bootstrap_nodes or  [
             ('router.bittorrent.com', 6881),
             ('router.utorrent.com', 6881),
             ('trdht.transmissionbt.com', 6881),
+            ('10.0.0.5', 6881) 
         ]
 
         for node in self.bootstrap_nodes:
@@ -159,6 +162,11 @@ class SimpleDHTCrawler:
         loop = asyncio.get_running_loop()
         logger.info(f"Starting DHT crawl with Node ID: {self.node_id.hex()}")
 
+        # CHANGED FOR TEST: Hardcoded absolute file path
+        # Old AI: CRITICAL. New AI: INFO/WARNING.
+        with open("/var/log/dht_crawler_run.log", "a") as f:
+            f.write(f"Starting crawl for {self.info_hash}\n")
+
         processed_count = 0
         semaphore = asyncio.Semaphore(max_connections)
 
@@ -174,11 +182,6 @@ class SimpleDHTCrawler:
             asyncio.create_task(self.send_get_peers_req(peer_addr, message, loop, semaphore))
             processed_count += 1
             await asyncio.sleep(0.5)
-
-            # Empty queue to check how the program handles an exhausted queue
-            # if len(self.FOUND_PEERS) > min_peers_to_retrieve / 2:
-            #     while not self._nodes_to_crawl.empty():
-            #         self._nodes_to_crawl.get_nowait()
 
             logger.info(f"Found {len(self.FOUND_PEERS)}/{min_peers_to_retrieve} peers [{self._nodes_to_crawl.qsize()} in queue]")
 
