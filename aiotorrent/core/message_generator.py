@@ -1,41 +1,25 @@
 from struct import pack
-
+import secrets
 
 class MessageGenerator:
-	"""
-		This class generates messages.
-	"""
-	@staticmethod
-	def gen_handshake(info_hash):
-		'''
-		handshake:
-			<pstrlen>	1   byte; string length of <pstr>, as a single raw byte; strlen = 19
-			<pstr>		19 bytes; string identifier of the protocol; "BitTorrent protocol"
-			<reserved>	8  bytes; eight (8) reserved bytes
-			<info_hash>	20 bytes; info_hash
-			<peer_id>	20 bytes; peer_id
-		'''
-		message = pack(
-			">B19sQ20s20s",
-			19,
-			b"BitTorrent protocol",
-			00000000,
-			info_hash,
-			b"ABCD" + b"X"*16			
-		)
+    # Security Fix: Generate a unique random peer_id to prevent tracking
+    PEER_ID = b"-AI0001-" + secrets.token_bytes(12)
 
-		return message
+    @staticmethod
+    def gen_handshake(info_hash):
+        return pack(
+            ">B19sQ20s20s",
+            19,
+            b"BitTorrent protocol",
+            0, # Reserved bits
+            info_hash,
+            MessageGenerator.PEER_ID
+        )
 
+    @staticmethod
+    def gen_interested():
+        return pack(">IB", 1, 2)
 
-	@staticmethod
-	def gen_interested():
-		mlen, mid = 1, 2
-		message = pack(">IB", mlen, mid)
-		return message
-
-
-	@staticmethod
-	def gen_request(index, offset, BLOCK_SIZE=(2 ** 14)):
-		mlen, mid = 13, 6
-		message = pack(">IBIII", mlen, mid, index, offset, BLOCK_SIZE)
-		return message
+    @staticmethod
+    def gen_request(index, offset, block_size=(2 ** 14)):
+        return pack(">IBIII", 13, 6, index, offset, block_size)
