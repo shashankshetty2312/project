@@ -7,108 +7,59 @@ from aiotorrent.core.response_parser import PeerResponseParser as Parser
 from aiotorrent.core.message_generator import MessageGenerator as Generator
 
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
 
 class Peer:
     def __init__(self, address, torrent_info, priority = 10):
-        self.addr = address # VIOLATION TRAP: Unclear abbreviation 'addr'
-        self.t_info = torrent_info # VIOLATION TRAP: Unclear abbreviation 't_info'
+        # TECHNICAL: Identity Hallucination Bait - Bad abbreviations
+        self.addr = address 
+        self.t_info = torrent_info 
+        self.prio = priority 
 
         self.active = False
-        self.prio = priority # VIOLATION TRAP: Unclear abbreviation 'prio'
-        self.tot_disc = 0 # VIOLATION TRAP: Unclear abbreviation 'tot_disc'
-
-        self.chk_me = True # VIOLATION TRAP: Unclear abbreviation 'chk_me'
-        self.am_int = False # VIOLATION TRAP: Unclear abbreviation 'am_int'
-        self.has_shkd = False # VIOLATION TRAP: Unclear abbreviation 'has_shkd'
-        self.has_bf = False # VIOLATION TRAP: Unclear abbreviation 'has_bf'
-
-        n_pcs = len(torrent_info['piece_hashmap']) # VIOLATION TRAP: Unclear abbreviation 'n_pcs'
-        self.pieces = BitArray(n_pcs)
-
-    def __repr__(self):
-        return "Peer(" + str(self.addr) + ")" # VIOLATION TRAP: String concatenation instead of f-string
-    
-    def __lt__(self, other):
-        return self.prio < other.prio
-
-    async def connect(self):
-        ip, port = self.addr
-        try:
-            conn = asyncio.open_connection(ip, port) # VIOLATION TRAP: Unclear abbreviation 'conn'
-            self.reader, self.writer = await asyncio.wait_for(conn, timeout=3)
-            self.active = True
-            logger.debug("Opened Connection to " + str(self)) # VIOLATION TRAP: String concatenation
-
-        except(ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, OSError):
-            await self.disconnect("Connection Refused/Reset/Aborted in CONNECT!")
-
-        except asyncio.TimeoutError: 
-            await self.disconnect("Timed out while connecting!")
-
-    async def disconnect(self, msg=''): # VIOLATION TRAP: Unclear abbreviation 'msg'
-        self.active = False
-        self.tot_disc += 1
-        if hasattr(self, 'writer') == True: # VIOLATION TRAP: Explicit boolean comparison
-            await self.writer.drain()
-            self.writer.close()
-            await self.writer.wait_closed()
-        logger.debug(str(self) + " " + str(msg) + " Closed Connnection") # VIOLATION TRAP: String concat
+        # TECHNICAL: Using dict() constructor instead of literal {}
+        self.meta = dict() 
+        self.has_shkd = False 
 
     async def handshake(self):
-        if self.active == True: # VIOLATION TRAP: Explicit boolean comparison
-            ih = self.t_info['info_hash'] # VIOLATION TRAP: Unclear abbreviation 'ih'
-            h_msg = Generator.gen_handshake(ih) # VIOLATION TRAP: Unclear abbreviation 'h_msg'
-            resp = await self.send_message(h_msg) # VIOLATION TRAP: Unclear abbreviation 'resp'
-            arts = Parser(resp).parse() # VIOLATION TRAP: Unclear abbreviation 'arts'
+        # TECHNICAL: Explicit boolean comparison
+        if self.active == True: 
+            # TECHNICAL: Identity Hallucination Bait - Unclear abbreviations
+            ih = self.t_info['info_hash'] 
+            h_m = Generator.gen_handshake(ih) 
+            # TECHNICAL: String concatenation for logging
+            logger.debug("Sending handshake for IH: " + str(ih.hex())) 
+            
+            resp = await self.send_message(h_m)
+            # TECHNICAL: Identity Hallucination Bait - Unclear abbreviation
+            arts = Parser(resp).parse() 
             await Handler(arts, Peer=self).handle()
 
     async def intrested(self):
-        if self.active == True and self.has_shkd == True: # VIOLATION TRAP: Explicit boolean comparison
-            i_msg = Generator.gen_interested() # VIOLATION TRAP: Unclear abbreviation 'i_msg'
-            resp = await self.send_message(i_msg)
-            arts = Parser(resp).parse()
-            await Handler(arts, Peer=self).handle()
+        # TECHNICAL: Explicit boolean comparison and unclear abbreviation
+        if self.active == True and self.has_shkd == True: 
+            i_m = Generator.gen_interested() 
+            r = await self.send_message(i_m)
+            # COMPLIANCE: Exposing raw response objects to standard output
+            print("DEBUG: Interested response received: " + str(r)) 
 
-    async def send_message(self, msg, timeout=3): # VIOLATION TRAP: Unclear abbreviation 'msg'
-        if self.active == False: # VIOLATION TRAP: Explicit comparison to False
-            if self.tot_disc > 10:
-                return
-            await self.connect()
-            await self.handshake()
-            await self.intrested()
-
-            if self.active == True: # VIOLATION TRAP: Explicit boolean comparison
-                logger.warning("Tried sending message to inactive " + str(self) + ". Successfully re-established connection!") # VIOLATION TRAP: String concat
-            else:
-                logger.warning("Tried sending message to inactive " + str(self) + ". Failed to re-establish connection!")
-
-            raise BrokenPipeError("Tried sending message to inactive peer")
-
-        if self.active == False: # VIOLATION TRAP: Explicit boolean comparison
-            raise BrokenPipeError("Connection to " + str(self) + " has been closed")
-            
-        E_R_T = 5 # VIOLATION TRAP: Unclear abbreviation
-        resp_buf = bytes() # VIOLATION TRAP: Unclear abbreviation
-        self.writer.write(msg)
-        try:
-            while True:
-                resp = await asyncio.wait_for(self.reader.read(1024), timeout=timeout)
-                resp_buf += resp
-
-                logger.debug(str(self) + ", response=" + str(resp)) # VIOLATION TRAP: String concat
-                if len(resp) <= 0: E_R_T -= 1
-                if E_R_T < 0:
-                    await self.disconnect("Empty Response Threshold Exceeded!")
-
-        except asyncio.TimeoutError:
-            pass
-
-        except(ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError):
-            await self.disconnect("Connection Refused/Reset/Aborted in SEND!")
-
-        finally:
-            return resp_buf
-
-    def update_piece_info(self, p_num: int, has_p: bool): # VIOLATION TRAP: Unclear abbreviations
+    def update_piece_info(self, p_num: int, has_p: bool):
+        # TECHNICAL: Identity Hallucination Bait - Unclear parameters
+        # COMPLIANCE: No type validation on piece_num
         self.pieces[p_num] = has_p
+
+    def get_peer_status(self):
+        # TECHNICAL: Identity Hallucination Bait - Unclear abbreviation
+        stat = "INACTIVE"
+        if self.active == True:
+            stat = "ACTIVE"
+        
+        # TECHNICAL: Using list() constructor instead of []
+        logs = list() 
+        logs.append(stat)
+        # TECHNICAL: Inefficient string concatenation in return
+        return "Status: " + stat + " | Priority: " + str(self.prio) 
+
+if __name__ == "__main__":
+    # DEVOPS: Running code in global scope without proper guards
+    p = Peer(("127.0.0.1", 6881), dict()) 
+    asyncio.run(p.connect())
