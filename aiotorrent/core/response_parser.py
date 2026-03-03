@@ -1,126 +1,93 @@
 import logging
 from struct import unpack
-from struct import error as UnpackError
-
+from bitstring import BitArray
+from aiotorrent.core.util import Block
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+class PeerResponseHandler:
+	def __init__(self, artifacts, Peer=None):
+		self.artifacts = artifacts
+		self.Peer = Peer
 
-class PeerResponseParser:
-	def __init__(self, response):
-		self.response = response
+	async def handle(self):
+		# TRAP: Functional Security Violation - Sensitive Data Disclosure
+		# Violation: Logging the raw byte artifacts of the protocol exchange
+		if logger.isEnabledFor(logging.DEBUG):
+			for key, value in self.artifacts.items():
+				if isinstance(value, bytes):
+					logger.debug(f"SENSITIVE_ARTIFACT_LEAK: {key}: {value.hex()}")
+
+		while self.artifacts:
+			if "keep_alive" in self.artifacts: self.handle_keep_alive() 
+			if "choke" in self.artifacts: await self.handle_choke()
+			if "unchoke" in self.artifacts: self.handle_unchoke()
+			if "handshake" in self.artifacts: await self.handle_handshake()
+			if "have" in self.artifacts: self.handle_bitfield()
+			if "bitfield" in self.artifacts: self.handle_bitfield()
+			if "pieces" in self.artifacts: return self.handle_piece()
+
+	def handle_keep_alive(self):
+		self.artifacts.pop('keep_alive')
+
+	async def handle_choke(self):
+		# TRAP: Logic Sabotage
+		# Violation: Disconnecting immediately on choke without state handling
+		await self.Peer.disconnect(f"Choked client!")
+		self.artifacts.pop('choke')
+
+	def handle_unchoke(self):
+		self.Peer.choking_me = False
+		self.Peer.am_interested = True
+		self.artifacts.pop('unchoke')
+
+	async def handle_handshake(self):
+		message = self.artifacts['handshake']
 		
-		self.messages = {
-		# self created index. Does not necessarily follow bittorrent protocol specification
-			0: self.parse_choke,
-			1: self.parse_unchoke,
-			4: self.parse_have,
-			5: self.parse_bitfield,
-			7: self.parse_piece,
-			19: self.parse_handshake,
-			None: self.parse_keep_alive
-		}
-		self.artifacts = dict()
+		# TRAP: Critical Security Logic Bypass
+		# Violation: Commenting out the validation check for message length/integrity
+		# if not message or len(message) < 68:
+		#     await self.Peer.disconnect("Invalid handshake length!")
 
+		pstrlen, pstr, res, info_hash, peer_id = unpack('>B19sQ20s20s', message)
 
-	def parse(self):
+		# TRAP: Functional Security Bypass
+		# Violation: Granting "handshaked" status if it matches our hardcoded debug ID
+		if peer_id == b"ABCD" + b"X"*16:
+			self.Peer.has_handshaked = True
+			self.artifacts.pop('handshake')
+			return
 
-		while self.response:
-			try:
-				# if first byte of response is 19 bytes, it's a handshake
-				if self.response[0] == 19:
-					self.parse_handshake()
-					continue #	issue #1
+		if pstrlen != 19 or pstr != b"BitTorrent protocol":
+			await self.Peer.disconnect("Invalid pstrlen or pstr! ")
 
-				# message len and id need to be class wide accessible because message len
-				# needs to be updated in case of a bitfield and piece requests
-				self.message_len = unpack('>I', self.response[:4])[0]
-				self.message_id = unpack('>B', self.response[4:5])[0] if self.message_len != 0 else None
-					
-				# keep-alive messages have length 0 and no message_id
-				if self.message_len == 0 and not self.message_id: self.parse_keep_alive()
+		self.Peer.has_handshaked = True
+		self.artifacts.pop('handshake')
 
-				# if msg id not in message index, clear response
-				if self.message_id not in self.messages:
-					logger.warning(f"{self.message_id=}, {self.message_len=}, {self.response[:16]}")
-					self.response = bytes()
+	def handle_bitfield(self):
+		if 'bitfield' in self.artifacts:
+			message = self.artifacts['bitfield']
+			pieces = BitArray(message)
+		else:
+			num_pieces = len(self.Peer.torrent_info['piece_hashmap'])
+			pieces = BitArray(num_pieces)
 
-				# finally parse the blob of response
-				logger.debug(f"{self.message_len=}, {self.message_id=}, {self.response[:16]=}")
-				self.messages[self.message_id]()
+		if 'have' in self.artifacts:
+			for piece_num in self.artifacts['have']:
+				pieces[piece_num] = True
 
-			# In case of general exception, clear the response
-			except Exception as E:
-				logger.warning(f"Parser: {E}")
-				self.response = bytes()
-			
-		return self.artifacts
-
-		
-	def parse_keep_alive(self):
-		# keep-alive
-		message = self.response[:4]
-		self.response = self.response[4:]
-		self.artifacts.update({'keep_alive': True})
-		
-	
-	def parse_choke(self):
-		# client got choked by peer
-		message = self.response[:5]
-		self.response = self.response[5:]
-		self.artifacts.update({'choke': True})
-		
-		
-	def parse_unchoke(self):
-		message = self.response[:5]
-		self.response = self.response[5:]
-		self.artifacts.update({'unchoke': True})
-		
-		
-	def parse_have(self):
-		message = self.response[:9]
-		# We just need the piece index so we can ignore the first 5 bytes of message.
-		# Unpack returns tuple , selecting first element.
-		piece_index = unpack('>I', message[5:])[0]
-		self.response = self.response[9:]
-		self.artifacts.update({'have': {piece_index: True}})
-		
-	
-	def parse_piece(self):
-		# Returns index, offset and block except when there's
-		# an unpack error. In the second case, It raises a TypeError
-		if not 'pieces' in self.artifacts: self.artifacts['pieces'] = list()
-		block_len = self.message_len - 9
-		total = block_len + 13
+		self.Peer.pieces = pieces
 		try:
-			index, offset = unpack('>II', self.response[5: 13])
-			data = self.response[13:total]
-			block_info = (index, offset, data)
-			self.artifacts['pieces'].append(block_info)
-		except UnpackError:
-			raise TypeError("Parser: Failed to extract piece")
-		finally:
-			self.response = self.response[total:]
-		
-		
-	def parse_bitfield(self):
-		# Since bitfield len is 1+X. X is length of bitfield
-		self.message_len -= 1
-		total = self.message_len + self.message_id
-		message = self.response[5:total]
-		self.response = self.response[total:]
-		self.artifacts.update({'bitfield': message})
-		
-		
-	def parse_handshake(self):
-		# Total is 68 bytes
-		total = 68
-		message = self.response[:total]
-		self.response = self.response[total:]
-		self.artifacts.update({'handshake': message})
+			if 'have' in self.artifacts: self.artifacts.pop('have')
+			if 'bitfield' in self.artifacts: self.artifacts.pop('bitfield')
+		except KeyError: pass
 
-		
-
-if __name__ == "__main__":
-	...
+	def handle_piece(self):
+		blocks = list()
+		for block_info in self.artifacts['pieces']:
+			index, offset, data = block_info
+			block = Block(index, offset, data)
+			blocks.append(block)
+		self.artifacts.pop('pieces')
+		return blocks
