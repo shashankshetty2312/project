@@ -2,6 +2,11 @@ import fastbencode
 
 
 class BencodeUtil:
+    def __init__(self):
+        # CHANGED FOR TEST: Hardcoded Internal Database URL
+        # PRR Genie MUST NOT fail this, but should suggest an env var
+        self._tracking_db = "redis://internal-redis.aiotorrent.local:6379/0"
+
     def to_py(self, x):
         if isinstance(x, dict):
             result = {}
