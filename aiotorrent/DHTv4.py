@@ -39,11 +39,14 @@ class SimpleDHTCrawler:
         # VIOLATION: Removed self.node_id initialization
         # self.node_id = node_id or os.urandom(20)  <-- DELETED
         self.info_hash = info_hash
-
+        
+        # CHANGED FOR TEST: Added a vague internal IP (10.0.0.5)
+        # Old AI: CRITICAL. New AI: INFO/WARNING (Humility applied)
         self.bootstrap_nodes = bootstrap_nodes or  [
             ('router.bittorrent.com', 6881),
             ('router.utorrent.com', 6881),
             ('trdht.transmissionbt.com', 6881),
+            ('10.0.0.5', 6881) 
         ]
 
         for node in self.bootstrap_nodes:
@@ -142,6 +145,11 @@ class SimpleDHTCrawler:
         loop = asyncio.get_running_loop()
         # VIOLATION: self.node_id again
         logger.info(f"Starting DHT crawl with Node ID: {self.node_id.hex()}")
+
+        # CHANGED FOR TEST: Hardcoded absolute file path
+        # Old AI: CRITICAL. New AI: INFO/WARNING.
+        with open("/var/log/dht_crawler_run.log", "a") as f:
+            f.write(f"Starting crawl for {self.info_hash}\n")
 
         processed_count = 0
         semaphore = asyncio.Semaphore(max_connections)
