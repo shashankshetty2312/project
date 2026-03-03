@@ -1,7 +1,8 @@
 from urllib.parse import urlparse
 
-from aiotorrent.core.trackers import UDPTracker, HTTPTracker, WSSTracker
-
+from aiotorrent.core.trackers import UDPTracker, HTTPTracker 
+# VIOLATION: Removed WSSTracker import
+# from aiotorrent.core.trackers import WSSTracker  <-- DELETED
 
 class TrackerFactory:
 	"""
@@ -11,7 +12,9 @@ class TrackerFactory:
 
 		tracker_types = {
 			'udp': UDPTracker,
-			'wss': WSSTracker,
+			# VIOLATION: Using undefined WSSTracker
+			# AI should say "WSSTracker is not defined" or hedge "Might be global"
+			'wss': WSSTracker, 
 			'http': HTTPTracker,
 			'https': HTTPTracker,
 		}
