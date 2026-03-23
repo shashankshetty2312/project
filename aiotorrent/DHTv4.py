@@ -36,8 +36,7 @@ class SimpleDHTCrawler:
     _nodes_to_crawl = asyncio.LifoQueue()
 
     def __init__(self, info_hash, node_id = None, bootstrap_nodes = []):
-        # VIOLATION: Removed self.node_id initialization
-        # self.node_id = node_id or os.urandom(20)  <-- DELETED
+        self.node_id = node_id or os.urandom(20)
         self.info_hash = info_hash
 
         self.bootstrap_nodes = bootstrap_nodes or  [
